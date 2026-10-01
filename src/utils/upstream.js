@@ -24,12 +24,20 @@ class UpstreamError extends Error {
 const BASES = {
   auth: env.AUTH_SERVICE_URL,
   'identity-profiles': env.IDENTITY_PROFILES_SERVICE_URL,
+  'service-catalogue': env.SERVICE_CATALOGUE_SERVICE_URL,
 };
 
+// Multipart uploads (service images) are piped through untouched — the owning
+// service parses and validates them — so they get a longer budget.
+const STREAM_TIMEOUT_MS = 30_000;
+
 /**
- * @returns {Promise<{ ok, status, data, message, error }>}
+ * @param opts.body    JSON-serialised
+ * @param opts.stream  { req } — pipe the inbound request body as-is (multipart)
+ * @param opts.headers extra headers (e.g. the panel's `locale`)
+ * @returns {Promise<{ ok, status, data, meta, message, error }>}
  */
-const call = async (service, method, pathname, { body, query } = {}) => {
+const call = async (service, method, pathname, { body, query, stream, headers = {} } = {}) => {
   const base = BASES[service];
   if (!base) throw new Error(`unknown upstream service "${service}"`);
   const url = new URL(base.replace(/\/+$/, '') + pathname);
@@ -40,11 +48,20 @@ const call = async (service, method, pathname, { body, query } = {}) => {
   let res;
   let json;
   try {
+    const streamed = Boolean(stream);
     res = await fetch(url, {
       method,
-      headers: { 'content-type': 'application/json', 'x-internal-key': env.INTERNAL_API_KEY || '' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(env.INTERNAL_HTTP_TIMEOUT_MS),
+      headers: {
+        ...headers,
+        'content-type': streamed ? stream.req.headers['content-type'] : 'application/json',
+        ...(streamed && stream.req.headers['content-length']
+          ? { 'content-length': stream.req.headers['content-length'] }
+          : {}),
+        'x-internal-key': env.INTERNAL_API_KEY || '',
+      },
+      body: streamed ? stream.req : body === undefined ? undefined : JSON.stringify(body),
+      ...(streamed ? { duplex: 'half' } : {}),
+      signal: AbortSignal.timeout(streamed ? STREAM_TIMEOUT_MS : env.INTERNAL_HTTP_TIMEOUT_MS),
     });
     json = await res.json();
   } catch (err) {
@@ -57,6 +74,7 @@ const call = async (service, method, pathname, { body, query } = {}) => {
     ok: res.ok,
     status: res.status,
     data: json && typeof json === 'object' ? (json.data ?? null) : null,
+    meta: (json && json.meta) || {},
     message: (json && json.message) || null,
     error: (json && json.error) || null,
   };
@@ -68,10 +86,23 @@ const client = (service) => ({
   put: (pathname, body) => call(service, 'PUT', pathname, { body }),
   patch: (pathname, body) => call(service, 'PATCH', pathname, { body }),
   del: (pathname) => call(service, 'DELETE', pathname),
+  // Relay the inbound admin request (method, query, JSON or multipart body,
+  // locale) to `pathname` on this service.
+  forward: (pathname, req) => {
+    const multipart = /^multipart\//i.test(req.headers['content-type'] || '');
+    const hasBody = !['GET', 'HEAD', 'DELETE'].includes(req.method);
+    return call(service, req.method, pathname, {
+      query: req.query,
+      headers: req.headers.locale ? { locale: String(req.headers.locale) } : {},
+      ...(hasBody && multipart ? { stream: { req } } : {}),
+      ...(hasBody && !multipart ? { body: req.body || {} } : {}),
+    });
+  },
 });
 
 module.exports = {
   auth: client('auth'),
   identity: client('identity-profiles'),
+  catalogue: client('service-catalogue'),
   UpstreamError,
 };

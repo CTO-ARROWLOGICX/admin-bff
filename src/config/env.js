@@ -21,6 +21,7 @@ const env = loadEnv(
 
     AUTH_SERVICE_URL: serviceUrl('http://localhost:4001'),
     IDENTITY_PROFILES_SERVICE_URL: serviceUrl('http://localhost:4002'),
+    SERVICE_CATALOGUE_SERVICE_URL: serviceUrl('http://localhost:4004'),
   },
   { name: 'admin-bff' },
 );
