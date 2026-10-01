@@ -1,0 +1,23 @@
+{
+  "name": "@zafabit/admin-bff",
+  "version": "0.1.0",
+  "description": "Admin BFF — backend-for-frontend for the admin panel; composes the owning services' /internal APIs (no database of its own)",
+  "main": "src/server.js",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@zafabit/service-kit": "file:vendor/service-kit",
+    "dotenv": "^17.4.1",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.14",
+    "supertest": "^7.2.2"
+  }
+}

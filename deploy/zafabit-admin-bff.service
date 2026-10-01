@@ -1,0 +1,35 @@
+# /etc/systemd/system/zafabit-admin-bff.service
+# Bare-Node deployment for a 1 GB droplet (no Docker).
+#
+#   git clone <repo> /opt/zafabit-admin-bff && cd /opt/zafabit-admin-bff
+#   cp .env.example .env && edit .env
+#   npm ci --omit=dev            # self-contained: vendored kit + .npmrc install-links
+#   cp deploy/zafabit-admin-bff.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now zafabit-admin-bff
+#
+# Redeploy:
+#   cd /opt/zafabit-admin-bff && git pull && npm ci --omit=dev && systemctl restart zafabit-admin-bff
+
+[Unit]
+Description=Zafabit admin-bff service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/zafabit-admin-bff
+EnvironmentFile=/opt/zafabit-admin-bff/.env
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=3
+User=zafabit
+Group=zafabit
+# hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/zafabit-admin-bff
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
