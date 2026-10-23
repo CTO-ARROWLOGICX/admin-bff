@@ -1,27 +1,11 @@
-const { sendResponse, sendError, z } = require('@zafabit/service-kit');
+const { z } = require('@zafabit/service-kit');
 const upstream = require('../utils/upstream');
+const { relay } = require('../utils/relay');
 
 // /admin/shared/services/* (the panel's /api/v1/services) and
 // /admin/config/booking — service-catalogue owns the data and the request
 // contract (validation, multipart images), so these relay the admin's request
 // and service-catalogue's answer unchanged.
-
-const relay = (res, result) =>
-  result.ok
-    ? sendResponse(
-        res,
-        result.status,
-        result.message,
-        result.data,
-        result.meta && result.meta.pagination ? { pagination: result.meta.pagination } : {},
-      )
-    : sendError(
-        res,
-        result.status,
-        result.message || 'We were unable to complete your request.',
-        (result.error && result.error.code) || 'UPSTREAM_ERROR',
-        (result.error && result.error.details) || [],
-      );
 
 // Validated here only so a junk id can't be spliced into the upstream path.
 const serviceIdSchema = z.object({
