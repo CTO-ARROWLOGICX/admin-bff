@@ -25,6 +25,8 @@ const BASES = {
   auth: env.AUTH_SERVICE_URL,
   'identity-profiles': env.IDENTITY_PROFILES_SERVICE_URL,
   'service-catalogue': env.SERVICE_CATALOGUE_SERVICE_URL,
+  maid: env.MAID_SERVICE_URL,
+  'booking-engine': env.BOOKING_ENGINE_SERVICE_URL,
 };
 
 // Multipart uploads (service images) are piped through untouched — the owning
@@ -104,5 +106,7 @@ module.exports = {
   auth: client('auth'),
   identity: client('identity-profiles'),
   catalogue: client('service-catalogue'),
+  maid: client('maid'),
+  booking: client('booking-engine'),
   UpstreamError,
 };

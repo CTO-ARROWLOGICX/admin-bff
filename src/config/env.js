@@ -22,6 +22,8 @@ const env = loadEnv(
     AUTH_SERVICE_URL: serviceUrl('http://localhost:4001'),
     IDENTITY_PROFILES_SERVICE_URL: serviceUrl('http://localhost:4002'),
     SERVICE_CATALOGUE_SERVICE_URL: serviceUrl('http://localhost:4004'),
+    MAID_SERVICE_URL: serviceUrl('http://localhost:4003'),
+    BOOKING_ENGINE_SERVICE_URL: serviceUrl('http://localhost:4005'),
   },
   { name: 'admin-bff' },
 );
