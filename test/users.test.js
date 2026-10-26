@@ -156,6 +156,39 @@ describe('GET /users', () => {
   });
 });
 
+describe('maidProfile composition', () => {
+  const MAID_ID = '44444444-4444-4444-4444-444444444444';
+  const maidProfile = { userId: MAID_ID, activeStatus: 'active', isIdentityVerified: true, zone: 'Kochi 1' };
+
+  it('GET /users fills maidProfile for maid accounts only', async () => {
+    const { token } = signIn();
+    mockAuth.post.mockResolvedValue(
+      ok({ users: [account({ id: MAID_ID, role: 'maid' }), account()], total: 2 }),
+    );
+    mockIdentity.post.mockResolvedValue(ok({ profiles: {} }));
+    mockMaid.post.mockResolvedValue(ok({ profiles: { [MAID_ID]: maidProfile } }));
+
+    const res = await request(app).get('/users?role=maid').set('authorization', token);
+
+    expect(res.status).toBe(200);
+    expect(mockMaid.post).toHaveBeenCalledWith('/internal/maids/profiles/batch', { userIds: [MAID_ID] });
+    const [maid, customer] = res.body.data.users;
+    expect(maid.maidProfile).toEqual(maidProfile);
+    expect(customer.maidProfile).toBeNull();
+  });
+
+  it('GET /users still answers when maid-service is down', async () => {
+    const { token } = signIn();
+    mockAuth.post.mockResolvedValue(ok({ users: [account({ id: MAID_ID, role: 'maid' })], total: 1 }));
+    mockIdentity.post.mockResolvedValue(ok({ profiles: {} }));
+    mockMaid.post.mockRejectedValue(new UpstreamError('maid', 'down'));
+
+    const res = await request(app).get('/users?role=maid').set('authorization', token);
+    expect(res.status).toBe(200);
+    expect(res.body.data.users[0].maidProfile).toBeNull();
+  });
+});
+
 describe('PATCH /users/:id/status', () => {
   it('suspends via auth', async () => {
     const { token } = signIn('operations_admin');
