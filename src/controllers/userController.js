@@ -7,8 +7,10 @@ const { isSuperAdmin, forgetAccount } = require('../middleware/requireAdmin');
 // auth (credentials, role, blocked/verified) and identity-profiles (names,
 // addresses, property profile).
 //
+// maidProfile (maid accounts) comes from maid-service.
+//
 // Not yet composed (owning services have no internal API yet), returned as
-// neutral defaults so the panel renders: maidProfile (maid), wallet balance /
+// neutral defaults so the panel renders: wallet balance /
 // reward points / referral credits (promotions-rewards), and the
 // booking-derived KPIs dau / returningUsers / retention (booking-engine).
 // `meta.kpis.unavailable` names the ones that are placeholders.
@@ -31,7 +33,7 @@ const splitName = (full) => {
 };
 
 // The monolith's populated User document, as the panel reads it.
-const composeUser = (account, profile) => ({
+const composeUser = (account, profile, maidProfile = null) => ({
   _id: account.id,
   id: account.id,
   firstName: (profile && profile.firstName) || null,
@@ -48,7 +50,7 @@ const composeUser = (account, profile) => ({
   updatedAt: account.updatedAt,
   addresses: (profile && profile.addresses) || [],
   customerProfile: (profile && profile.customerProfile) || null,
-  maidProfile: null,
+  maidProfile,
   walletBalance: 0,
   rewardPoints: 0,
   referralCredits: 0,
@@ -58,6 +60,18 @@ const fetchProfiles = async (userIds) => {
   if (!userIds.length) return {};
   const result = await upstream.identity.post('/internal/admin/profiles/batch', { userIds });
   return result.ok && result.data ? result.data.profiles || {} : {};
+};
+
+// Best-effort like fetchProfiles: a maid-service outage leaves maidProfile null.
+const fetchMaidProfiles = async (accounts) => {
+  const userIds = accounts.filter((a) => a.role === 'maid').map((a) => a.id);
+  if (!userIds.length) return {};
+  try {
+    const result = await upstream.maid.post('/internal/maids/profiles/batch', { userIds });
+    return result && result.ok && result.data ? result.data.profiles || {} : {};
+  } catch {
+    return {};
+  }
 };
 
 const fetchAccount = async (id) => upstream.auth.get(`/internal/users/${id}`);
@@ -108,13 +122,16 @@ exports.getUsers = async (req, res, next) => {
     if (!stats.ok) return relay(res, stats);
 
     const { users: accounts, total } = list.data;
-    const profiles = await fetchProfiles(accounts.map((a) => a.id));
+    const [profiles, maidProfiles] = await Promise.all([
+      fetchProfiles(accounts.map((a) => a.id)),
+      fetchMaidProfiles(accounts),
+    ]);
 
     return sendResponse(
       res,
       200,
       'Users retrieved',
-      { users: accounts.map((a) => composeUser(a, profiles[a.id])) },
+      { users: accounts.map((a) => composeUser(a, profiles[a.id], maidProfiles[a.id] || null)) },
       {
         pagination: paginationMeta(q.page, q.limit, total),
         kpis: {
@@ -157,10 +174,11 @@ exports.updateUserStatus = async (req, res, next) => {
       forgetAccount(id);
     }
 
-    const profiles = await fetchProfiles([id]);
+    const [profiles, maidProfiles] = await Promise.all([fetchProfiles([id]), fetchMaidProfiles([account])]);
+    const maidProfile = maidProfiles[id] || null;
     return sendResponse(res, 200, 'User status updated', {
-      user: composeUser(account, profiles[id]),
-      profile: null, // maid activeStatus / isIdentityVerified: pending maid-service internal API
+      user: composeUser(account, profiles[id], maidProfile),
+      profile: maidProfile,
     });
   } catch (error) {
     next(error);
@@ -229,11 +247,13 @@ exports.updateUser = async (req, res, next) => {
       const updated = await upstream.maid.patch(`/internal/maids/${id}/profile`, maidPatch);
       if (!updated.ok) return relay(res, updated);
       maidProfile = updated.data;
+    } else {
+      maidProfile = (await fetchMaidProfiles([account]))[id] || null;
     }
 
     const profiles = await fetchProfiles([id]);
     return sendResponse(res, 200, 'User updated successfully', {
-      user: { ...composeUser(account, profiles[id]), maidProfile },
+      user: composeUser(account, profiles[id], maidProfile),
     });
   } catch (error) {
     next(error);
