@@ -30,6 +30,17 @@ const updateUserSchema = z.object({
   phone: z.string().trim().max(20).nullable().optional(),
   location: z.string().trim().max(100).optional(),
   adminRole: schemas.oneOf(ALL_ADMINS, 'Admin role').optional(),
+  // The panel sends '' when the password box is left empty — no change.
+  password: z.preprocess(
+    (v) => (v === '' || v === null ? undefined : v),
+    z.string().min(8, 'Password must be at least 8 characters.').max(128).optional(),
+  ),
+  // Maid accounts only — owned by maid-service, which validates the values.
+  zone: z.string().trim().max(100).nullable().optional(),
+  jobType: z.string().trim().max(30).nullable().optional(),
+  language: z.string().trim().max(10).optional(),
+  activeStatus: z.string().trim().max(30).optional(),
+  isIdentityVerified: z.boolean().optional(),
 });
 
 const updateStatusSchema = z.object({

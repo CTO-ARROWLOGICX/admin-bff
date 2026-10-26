@@ -167,14 +167,18 @@ exports.updateUserStatus = async (req, res, next) => {
   }
 };
 
+const MAID_FIELDS = ['zone', 'jobType', 'language', 'activeStatus', 'isIdentityVerified'];
+
 /**
  * @route PUT /admin/users/:id
- * body: { name? | firstName?/lastName?, email?, phone?, location?, adminRole? }
+ * body: { name? | firstName?/lastName?, email?, phone?, password?, location?, adminRole?,
+ *         zone?, jobType?, language?, activeStatus?, isIdentityVerified? }
+ * The zone … isIdentityVerified fields are maid-only and go to maid-service.
  */
 exports.updateUser = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, firstName, lastName, email, phone, location, adminRole } = req.validated;
+    const { name, firstName, lastName, email, phone, password, location, adminRole } = req.validated;
 
     const target = await fetchAccount(id);
     if (!target.ok) return relay(res, target);
@@ -183,10 +187,18 @@ exports.updateUser = async (req, res, next) => {
       return sendError(res, 403, 'Only super admins can edit administrator accounts.', 'FORBIDDEN');
     }
 
+    const maidPatch = {};
+    for (const key of MAID_FIELDS) if (req.validated[key] !== undefined) maidPatch[key] = req.validated[key];
+    const hasMaidPatch = Object.keys(maidPatch).length > 0;
+    if (hasMaidPatch && target.data.role !== 'maid') {
+      return sendError(res, 400, 'Zone, job type, language, status and verification apply to maids only.', 'NOT_A_MAID');
+    }
+
     // Credentials first — the step most likely to be refused (taken email).
     const accountPatch = {};
     if (email) accountPatch.email = email;
     if (phone !== undefined) accountPatch.phone = phone || null;
+    if (password) accountPatch.password = password;
     if (adminRole && superAdmin && target.data.role === 'admin') accountPatch.adminRole = adminRole;
 
     let account = target.data;
@@ -212,8 +224,17 @@ exports.updateUser = async (req, res, next) => {
       if (!updated.ok) return relay(res, updated);
     }
 
+    let maidProfile = null;
+    if (hasMaidPatch) {
+      const updated = await upstream.maid.patch(`/internal/maids/${id}/profile`, maidPatch);
+      if (!updated.ok) return relay(res, updated);
+      maidProfile = updated.data;
+    }
+
     const profiles = await fetchProfiles([id]);
-    return sendResponse(res, 200, 'User updated successfully', { user: composeUser(account, profiles[id]) });
+    return sendResponse(res, 200, 'User updated successfully', {
+      user: { ...composeUser(account, profiles[id]), maidProfile },
+    });
   } catch (error) {
     next(error);
   }
