@@ -9,10 +9,11 @@ const fail = (status, code, message = 'nope') => ({
 
 const mockAuth = { get: jest.fn(), post: jest.fn(), put: jest.fn(), patch: jest.fn(), del: jest.fn() };
 const mockIdentity = { get: jest.fn(), post: jest.fn(), put: jest.fn(), patch: jest.fn(), del: jest.fn() };
+const mockMaid = { get: jest.fn(), post: jest.fn(), put: jest.fn(), patch: jest.fn(), del: jest.fn() };
 
 jest.mock('../src/utils/upstream', () => {
   const actual = jest.requireActual('../src/utils/upstream');
-  return { auth: mockAuth, identity: mockIdentity, UpstreamError: actual.UpstreamError };
+  return { auth: mockAuth, identity: mockIdentity, maid: mockMaid, UpstreamError: actual.UpstreamError };
 });
 
 const request = require('supertest');
@@ -226,6 +227,69 @@ describe('PUT /users/:id', () => {
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('ACCOUNT_TAKEN');
     expect(mockIdentity.put).not.toHaveBeenCalled();
+  });
+
+  it('sends a maid password to auth and the maid fields to maid-service', async () => {
+    const { token } = signIn('operations_admin');
+    extraAccounts[USER_ID] = account({ role: 'maid' });
+    mockAuth.patch.mockResolvedValue(ok(account({ role: 'maid' })));
+    mockIdentity.put.mockResolvedValue(ok({}));
+    mockIdentity.post.mockResolvedValue(ok({ profiles: {} }));
+    const maidProfile = { userId: USER_ID, zone: 'Kochi 1', activeStatus: 'active', isIdentityVerified: true };
+    mockMaid.patch.mockResolvedValue(ok(maidProfile));
+
+    const res = await request(app)
+      .put(`/users/${USER_ID}`)
+      .set('authorization', token)
+      .send({
+        name: 'Asha',
+        password: 'secret123',
+        zone: 'Kochi 1',
+        jobType: 'part_time',
+        language: 'ml',
+        activeStatus: 'active',
+        isIdentityVerified: true,
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockAuth.patch).toHaveBeenCalledWith(`/internal/admin/users/${USER_ID}`, { password: 'secret123' });
+    expect(mockMaid.patch).toHaveBeenCalledWith(`/internal/maids/${USER_ID}/profile`, {
+      zone: 'Kochi 1',
+      jobType: 'part_time',
+      language: 'ml',
+      activeStatus: 'active',
+      isIdentityVerified: true,
+    });
+    expect(res.body.data.user.maidProfile).toEqual(maidProfile);
+  });
+
+  it('treats an empty password as unchanged and skips maid-service when no maid field is sent', async () => {
+    const { token } = signIn();
+    extraAccounts[USER_ID] = account({ role: 'maid' });
+    mockIdentity.put.mockResolvedValue(ok({}));
+    mockIdentity.post.mockResolvedValue(ok({ profiles: {} }));
+    const res = await request(app).put(`/users/${USER_ID}`).set('authorization', token).send({ name: 'Asha', password: '' });
+    expect(res.status).toBe(200);
+    expect(mockAuth.patch).not.toHaveBeenCalled();
+    expect(mockMaid.patch).not.toHaveBeenCalled();
+  });
+
+  it('rejects maid fields on a non-maid account', async () => {
+    const { token } = signIn();
+    extraAccounts[USER_ID] = account();
+    const res = await request(app).put(`/users/${USER_ID}`).set('authorization', token).send({ activeStatus: 'active' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('NOT_A_MAID');
+    expect(mockMaid.patch).not.toHaveBeenCalled();
+  });
+
+  it('relays a maid-service validation error', async () => {
+    const { token } = signIn();
+    extraAccounts[USER_ID] = account({ role: 'maid' });
+    mockMaid.patch.mockResolvedValue(fail(400, 'VALIDATION_ERROR', 'Status is not valid.'));
+    const res = await request(app).put(`/users/${USER_ID}`).set('authorization', token).send({ activeStatus: 'bogus' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
   });
 });
 
