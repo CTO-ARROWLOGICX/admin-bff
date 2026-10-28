@@ -62,10 +62,26 @@ const createAdminSchema = z.object({
   ),
 });
 
+// POST /admin/maids — the panel's "Add Service Partner" form. Its rating,
+// completedJobs and totalEarnings boxes are dropped: those are earned through
+// bookings, never typed in. Zone … activeStatus are validated by maid-service.
+const createMaidSchema = z.object({
+  name: name('Name').min(1, 'Name is required.'),
+  email: z.string().trim().max(255).email('Enter a valid email address.'),
+  password: z.string().min(8, 'Password must be at least 8 characters.').max(128),
+  phone: z.string().trim().min(1, 'Phone number is required.').max(20),
+  zone: z.string().trim().min(1, 'Zone is required.').max(100),
+  jobType: z.string().trim().max(30).nullable().optional(),
+  language: z.string().trim().max(10).default('en'),
+  activeStatus: z.string().trim().max(30).default('inactive'),
+  isIdentityVerified: z.boolean().default(true),
+});
+
 module.exports = {
   listUsersQuerySchema,
   userIdParamSchema,
   updateUserSchema,
   updateStatusSchema,
   createAdminSchema,
+  createMaidSchema,
 };

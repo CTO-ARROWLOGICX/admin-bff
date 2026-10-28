@@ -385,3 +385,111 @@ describe('POST /users/create-admin', () => {
     expect(res.body.data.name).toBe('New');
   });
 });
+
+describe('POST /maids', () => {
+  const MAID_ID = '44444444-4444-4444-4444-444444444444';
+  const form = {
+    name: 'Lakshmi Nair',
+    email: 'lakshmi@zafabit.com',
+    password: 'longenough',
+    phone: '+919876543210',
+    zone: 'Infopark',
+    jobType: 'part_time',
+    language: 'ml',
+    rating: 5,
+    completedJobs: 120,
+    totalEarnings: 99999,
+    activeStatus: 'inactive',
+    isIdentityVerified: true,
+  };
+  const maidAccount = () =>
+    account({ id: MAID_ID, role: 'maid', email: form.email, phone: form.phone, employeeId: 'MAID0007' });
+  const create = (token, body = form) => request(app).post('/maids').set('authorization', token).send(body);
+
+  it('is closed to support and marketing admins', async () => {
+    const { token } = signIn('support_admin');
+    expect((await create(token)).status).toBe(403);
+    expect(mockAuth.post).not.toHaveBeenCalled();
+  });
+
+  it('creates the account, then the maid profile and name, dropping the earned stats', async () => {
+    const { token } = signIn('operations_admin');
+    mockAuth.post.mockResolvedValue(ok(maidAccount(), 201));
+    mockMaid.patch.mockResolvedValue(ok({ zone: 'Infopark', jobType: 'part_time', activeStatus: 'inactive' }));
+    mockIdentity.put.mockResolvedValue(ok({ name: 'Lakshmi Nair' }));
+
+    const res = await create(token);
+
+    expect(res.status).toBe(201);
+    expect(mockAuth.post).toHaveBeenCalledWith('/internal/admin/maids', {
+      email: form.email,
+      password: form.password,
+      phone: form.phone,
+      isVerified: true,
+    });
+    expect(mockMaid.patch).toHaveBeenCalledWith(`/internal/maids/${MAID_ID}/profile`, {
+      zone: 'Infopark',
+      jobType: 'part_time',
+      language: 'ml',
+      activeStatus: 'inactive',
+      isIdentityVerified: true,
+    });
+    expect(mockIdentity.put).toHaveBeenCalledWith(`/internal/profiles/${MAID_ID}`, {
+      firstName: 'Lakshmi',
+      lastName: 'Nair',
+    });
+    expect(res.body.data.user).toMatchObject({ id: MAID_ID, name: 'Lakshmi Nair', employeeId: 'MAID0007', role: 'maid' });
+    expect(res.body.data.profile).toMatchObject({ zone: 'Infopark' });
+  });
+
+  it('rejects a form missing a required field before touching auth', async () => {
+    const { token } = signIn();
+    const res = await create(token, { ...form, zone: '' });
+    expect(res.status).toBe(400);
+    expect(mockAuth.post).not.toHaveBeenCalled();
+  });
+
+  it('relays a taken email from auth', async () => {
+    const { token } = signIn();
+    mockAuth.post.mockResolvedValue(fail(409, 'EMAIL_TAKEN'));
+    const res = await create(token);
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('EMAIL_TAKEN');
+    expect(mockMaid.patch).not.toHaveBeenCalled();
+  });
+
+  it('undoes the account when maid-service refuses the profile', async () => {
+    const { token } = signIn();
+    mockAuth.post.mockResolvedValue(ok(maidAccount(), 201));
+    mockAuth.del.mockResolvedValue(ok({ id: MAID_ID }));
+    mockMaid.patch.mockResolvedValue(fail(400, 'VALIDATION_ERROR'));
+
+    const res = await create(token, { ...form, jobType: 'night_shift' });
+
+    expect(res.status).toBe(400);
+    expect(mockAuth.del).toHaveBeenCalledWith(`/internal/admin/users/${MAID_ID}`);
+    expect(mockIdentity.put).not.toHaveBeenCalled();
+  });
+
+  it('undoes the account and 502s when maid-service is down', async () => {
+    const { token } = signIn();
+    mockAuth.post.mockResolvedValue(ok(maidAccount(), 201));
+    mockAuth.del.mockResolvedValue(ok({ id: MAID_ID }));
+    mockMaid.patch.mockRejectedValue(new UpstreamError('maid', 'PATCH', '/x'));
+
+    const res = await create(token);
+
+    expect(res.status).toBe(502);
+    expect(mockAuth.del).toHaveBeenCalledWith(`/internal/admin/users/${MAID_ID}`);
+  });
+
+  it('still 201s if naming the profile fails', async () => {
+    const { token } = signIn();
+    mockAuth.post.mockResolvedValue(ok(maidAccount(), 201));
+    mockMaid.patch.mockResolvedValue(ok({ zone: 'Infopark' }));
+    mockIdentity.put.mockRejectedValue(new UpstreamError('identity-profiles', 'PUT', '/x'));
+    const res = await create(token);
+    expect(res.status).toBe(201);
+    expect(res.body.data.user.name).toBe('Lakshmi Nair');
+  });
+});

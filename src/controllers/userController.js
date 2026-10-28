@@ -323,3 +323,66 @@ exports.createAdmin = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * @route POST /admin/maids   (super_admin, operations_admin)
+ * body: { name, email, password, phone, zone, jobType?, language?, activeStatus?, isIdentityVerified? }
+ * The account (and employee ID) comes from auth, the maid profile from
+ * maid-service, the name from identity-profiles.
+ */
+exports.createMaid = async (req, res, next) => {
+  try {
+    const { name, email, password, phone, zone, jobType, language, activeStatus, isIdentityVerified } =
+      req.validated;
+
+    const created = await upstream.auth.post('/internal/admin/maids', {
+      email,
+      password,
+      phone,
+      isVerified: isIdentityVerified,
+    });
+    if (!created.ok) return relay(res, created);
+    const account = created.data;
+
+    // A maid without a profile can't be dispatched, so a refused or failed
+    // profile undoes the account — the admin can then simply resubmit.
+    const undo = () => upstream.auth.del(`/internal/admin/users/${account.id}`).catch(() => null);
+    let profiled;
+    try {
+      profiled = await upstream.maid.patch(`/internal/maids/${account.id}/profile`, {
+        zone,
+        jobType,
+        language,
+        activeStatus,
+        isIdentityVerified,
+      });
+    } catch (err) {
+      await undo();
+      throw err;
+    }
+    if (!profiled.ok) {
+      await undo();
+      return relay(res, profiled);
+    }
+
+    // Best-effort, as for createAdmin: the name can be fixed via PUT.
+    const named = await upstream.identity
+      .put(`/internal/profiles/${account.id}`, splitName(name))
+      .catch(() => ({ ok: false }));
+
+    return sendResponse(res, 201, 'Maid account created successfully', {
+      user: {
+        id: account.id,
+        _id: account.id,
+        name: named.ok && named.data ? named.data.name || name : name,
+        email: account.email,
+        phone: account.phone,
+        employeeId: account.employeeId,
+        role: account.role,
+      },
+      profile: profiled.data,
+    });
+  } catch (error) {
+    next(error);
+  }
+};

@@ -11,6 +11,7 @@ const {
   updateUserSchema,
   updateStatusSchema,
   createAdminSchema,
+  createMaidSchema,
 } = require('../schemas/users');
 
 const { SUPER, OPERATIONS, SUPPORT, MARKETING } = ADMIN_ROLES;
@@ -47,6 +48,9 @@ router.patch(
   validate(updateStatusSchema),
   users.updateUserStatus,
 );
+
+// --- Maid Partners ("Add Partner") -------------------------------------------
+router.post('/maids', allowRoles(SUPER, OPERATIONS), validate(createMaidSchema), users.createMaid);
 
 // --- Service catalogue (panel's /api/v1/services -> /admin/shared/services) ---
 // Any admin, as the monolith's restrictTo('admin') allowed. Bodies (JSON or
