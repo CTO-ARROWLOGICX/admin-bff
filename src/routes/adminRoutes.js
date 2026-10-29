@@ -5,6 +5,7 @@ const users = require('../controllers/userController');
 const catalogue = require('../controllers/catalogueController');
 const apartments = require('../controllers/apartmentsController');
 const operations = require('../controllers/operationsController');
+const reviews = require('../controllers/reviewsController');
 const {
   listUsersQuerySchema,
   userIdParamSchema,
@@ -100,5 +101,10 @@ router.post(
   validate(operations.assignSchema),
   operations.assignMaid,
 );
+
+// --- Review & Rating ---------------------------------------------------------
+// Any admin, as the monolith's restrictTo('admin') allowed.
+router.get('/reviews', allowRoles(...ALL_ADMINS), reviews.listReviews);
+router.get('/reports/sentiment', allowRoles(...ALL_ADMINS), reviews.sentimentReport);
 
 module.exports = router;
