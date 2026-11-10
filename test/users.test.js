@@ -9,7 +9,7 @@ const fail = (status, code, message = 'nope') => ({
 
 const mockAuth = { get: jest.fn(), post: jest.fn(), put: jest.fn(), patch: jest.fn(), del: jest.fn() };
 const mockIdentity = { get: jest.fn(), post: jest.fn(), put: jest.fn(), patch: jest.fn(), del: jest.fn() };
-const mockMaid = { get: jest.fn(), post: jest.fn(), put: jest.fn(), patch: jest.fn(), del: jest.fn() };
+const mockMaid = { get: jest.fn(), post: jest.fn(), put: jest.fn(), patch: jest.fn(), del: jest.fn(), forward: jest.fn() };
 
 jest.mock('../src/utils/upstream', () => {
   const actual = jest.requireActual('../src/utils/upstream');
@@ -323,6 +323,63 @@ describe('PUT /users/:id', () => {
     const res = await request(app).put(`/users/${USER_ID}`).set('authorization', token).send({ activeStatus: 'bogus' });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('GET /users/:id/liveness-checks', () => {
+  const MAID_ID = '44444444-4444-4444-4444-444444444444';
+  const checks = [{ sessionId: 'a', status: 'passed', confidence: 97.4, faceMatchSimilarity: 96, faceMatchPassed: true }];
+
+  it("relays a maid's face-verification history from maid-service", async () => {
+    const { token } = signIn('support_admin');
+    extraAccounts[MAID_ID] = account({ id: MAID_ID, role: 'maid' });
+    mockMaid.get.mockResolvedValue(ok({ checks }));
+
+    const res = await request(app).get(`/users/${MAID_ID}/liveness-checks`).set('authorization', token);
+
+    expect(res.status).toBe(200);
+    expect(mockMaid.get).toHaveBeenCalledWith(`/internal/maids/${MAID_ID}/liveness-checks`);
+    expect(res.body.data.checks).toEqual(checks);
+  });
+
+  it('rejects a non-maid account before calling maid-service', async () => {
+    const { token } = signIn();
+    extraAccounts[USER_ID] = account();
+    const res = await request(app).get(`/users/${USER_ID}/liveness-checks`).set('authorization', token);
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('NOT_A_MAID');
+    expect(mockMaid.get).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /users/:id/photo', () => {
+  const MAID_ID = '44444444-4444-4444-4444-444444444444';
+
+  it("relays the admin's photo upload to maid-service as the maid's enrollment photo", async () => {
+    const { token } = signIn('operations_admin');
+    extraAccounts[MAID_ID] = account({ id: MAID_ID, role: 'maid' });
+    mockMaid.forward.mockResolvedValue(ok({ userId: MAID_ID, selfieUrl: '/uploads/selfies/x.jpg' }));
+
+    const res = await request(app)
+      .put(`/users/${MAID_ID}/photo`)
+      .set('authorization', token)
+      .attach('photo', Buffer.from('fake-image-bytes'), { filename: 'photo.jpg', contentType: 'image/jpeg' });
+
+    expect(res.status).toBe(200);
+    expect(mockMaid.forward).toHaveBeenCalledWith(`/internal/maids/${MAID_ID}/photo`, expect.anything());
+    expect(res.body.data.selfieUrl).toBe('/uploads/selfies/x.jpg');
+  });
+
+  it('rejects a non-maid account before calling maid-service', async () => {
+    const { token } = signIn('operations_admin');
+    extraAccounts[USER_ID] = account();
+    const res = await request(app)
+      .put(`/users/${USER_ID}/photo`)
+      .set('authorization', token)
+      .attach('photo', Buffer.from('fake-image-bytes'), { filename: 'photo.jpg', contentType: 'image/jpeg' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('NOT_A_MAID');
+    expect(mockMaid.forward).not.toHaveBeenCalled();
   });
 });
 

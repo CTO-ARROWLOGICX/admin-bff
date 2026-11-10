@@ -261,6 +261,49 @@ exports.updateUser = async (req, res, next) => {
 };
 
 /**
+ * @route PUT /admin/users/:id/photo   (multipart, field `photo`)
+ * The Maid Partners panel's own photo upload — relayed to maid-service as her
+ * enrollment photo, which Face Liveness-at-login's identity match compares
+ * the login selfie against.
+ */
+exports.uploadMaidPhoto = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const target = await fetchAccount(id);
+    if (!target.ok) return relay(res, target);
+    if (target.data.role !== 'maid') {
+      return sendError(res, 400, 'Photo upload applies to maids only.', 'NOT_A_MAID');
+    }
+    const result = await upstream.maid.forward(`/internal/maids/${id}/photo`, req);
+    if (!result.ok) return relay(res, result);
+    return sendResponse(res, result.status, result.message, result.data);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @route GET /admin/users/:id/liveness-checks
+ * Her last 10 face-liveness-at-login attempts (maid-service), for the Maid
+ * Partners detail view's face-verification history.
+ */
+exports.getLivenessChecks = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const target = await fetchAccount(id);
+    if (!target.ok) return relay(res, target);
+    if (target.data.role !== 'maid') {
+      return sendError(res, 400, 'Face verification history applies to maids only.', 'NOT_A_MAID');
+    }
+    const result = await upstream.maid.get(`/internal/maids/${id}/liveness-checks`);
+    if (!result.ok) return relay(res, result);
+    return sendResponse(res, 200, 'Face verification history.', result.data);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * @route DELETE /admin/users/:id
  * Removes the credentials (auth) then the profile rows (identity-profiles).
  * Maid profile rows: pending maid-service internal API.
