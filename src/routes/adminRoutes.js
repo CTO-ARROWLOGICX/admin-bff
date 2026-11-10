@@ -49,6 +49,18 @@ router.patch(
   validate(updateStatusSchema),
   users.updateUserStatus,
 );
+router.get(
+  '/users/:id/liveness-checks',
+  allowRoles(SUPER, OPERATIONS, SUPPORT),
+  validate(userIdParamSchema, 'params'),
+  users.getLivenessChecks,
+);
+router.put(
+  '/users/:id/photo',
+  allowRoles(SUPER, OPERATIONS),
+  validate(userIdParamSchema, 'params'),
+  users.uploadMaidPhoto,
+);
 
 // --- Maid Partners ("Add Partner") -------------------------------------------
 router.post('/maids', allowRoles(SUPER, OPERATIONS), validate(createMaidSchema), users.createMaid);
