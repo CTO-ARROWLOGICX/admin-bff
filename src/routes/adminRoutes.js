@@ -8,6 +8,7 @@ const operations = require('../controllers/operationsController');
 const reviews = require('../controllers/reviewsController');
 const sos = require('../controllers/sosConfigController');
 const verifications = require('../controllers/verificationsController');
+const incidents = require('../controllers/incidentsController');
 const {
   listUsersQuerySchema,
   userIdParamSchema,
@@ -100,6 +101,21 @@ router.delete(
   allowRoles(SUPER, OPERATIONS),
   validate(userIdParamSchema, 'params'),
   users.deleteMaid,
+);
+
+// --- SOS incidents (Support dashboard) ---------------------------------------
+// Super and Support admins see and resolve safety alerts.
+router.get(
+  '/incidents',
+  allowRoles(SUPER, SUPPORT),
+  validate(incidents.listQuerySchema, 'query'),
+  incidents.listIncidents,
+);
+router.patch(
+  '/incidents/:id/resolve',
+  allowRoles(SUPER, SUPPORT),
+  validate(incidents.idParamSchema, 'params'),
+  incidents.resolveIncident,
 );
 
 // --- SOS emergency number (settings screen) -----------------------------------
