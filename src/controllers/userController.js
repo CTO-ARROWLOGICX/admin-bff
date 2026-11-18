@@ -429,3 +429,21 @@ exports.createMaid = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * @route DELETE /admin/maids/:id   (super_admin, operations)
+ * Deletes a maid partner account. Refuses any other kind of account, then
+ * runs the same delete as DELETE /admin/users/:id.
+ */
+exports.deleteMaid = async (req, res, next) => {
+  try {
+    const target = await fetchAccount(req.params.id);
+    if (!target.ok) return relay(res, target);
+    if (target.data.role !== 'maid') {
+      return sendError(res, 404, "We couldn't find that maid partner.", 'MAID_NOT_FOUND');
+    }
+    return exports.deleteUser(req, res, next);
+  } catch (error) {
+    return next(error);
+  }
+};
