@@ -7,6 +7,7 @@ const apartments = require('../controllers/apartmentsController');
 const operations = require('../controllers/operationsController');
 const reviews = require('../controllers/reviewsController');
 const sos = require('../controllers/sosConfigController');
+const verifications = require('../controllers/verificationsController');
 const {
   listUsersQuerySchema,
   userIdParamSchema,
@@ -79,6 +80,27 @@ router.delete('/shared/services/:id', allowRoles(...ALL_ADMINS), serviceId, cata
 // --- Booking config (settings screen) ----------------------------------------
 router.get('/config/booking', allowRoles(SUPER, OPERATIONS), catalogue.getBookingConfig);
 router.put('/config/booking', allowRoles(SUPER, OPERATIONS), catalogue.updateBookingConfig);
+
+// --- Maid partners: verification queue and deletion ---------------------------
+router.get(
+  '/verifications/pending',
+  allowRoles(SUPER, OPERATIONS),
+  validate(verifications.pendingQuerySchema, 'query'),
+  verifications.listPending,
+);
+router.patch(
+  '/verifications/:id/approve',
+  allowRoles(SUPER, OPERATIONS),
+  validate(verifications.verificationParamSchema, 'params'),
+  validate(verifications.approveVerificationSchema),
+  verifications.approveVerification,
+);
+router.delete(
+  '/maids/:id',
+  allowRoles(SUPER, OPERATIONS),
+  validate(userIdParamSchema, 'params'),
+  users.deleteMaid,
+);
 
 // --- SOS emergency number (settings screen) -----------------------------------
 // Everyone on the panel can see the number; only Super and Support admins change it.
