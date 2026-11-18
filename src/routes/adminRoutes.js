@@ -6,6 +6,7 @@ const catalogue = require('../controllers/catalogueController');
 const apartments = require('../controllers/apartmentsController');
 const operations = require('../controllers/operationsController');
 const reviews = require('../controllers/reviewsController');
+const sos = require('../controllers/sosConfigController');
 const {
   listUsersQuerySchema,
   userIdParamSchema,
@@ -78,6 +79,11 @@ router.delete('/shared/services/:id', allowRoles(...ALL_ADMINS), serviceId, cata
 // --- Booking config (settings screen) ----------------------------------------
 router.get('/config/booking', allowRoles(SUPER, OPERATIONS), catalogue.getBookingConfig);
 router.put('/config/booking', allowRoles(SUPER, OPERATIONS), catalogue.updateBookingConfig);
+
+// --- SOS emergency number (settings screen) -----------------------------------
+// Everyone on the panel can see the number; only Super and Support admins change it.
+router.get('/config/sos', allowRoles(...ALL_ADMINS), sos.getSosConfig);
+router.put('/config/sos', allowRoles(SUPER, SUPPORT), validate(sos.sosConfigSchema), sos.updateSosConfig);
 
 // --- Apartments (Phase 1: apartment-wise service) ----------------------------
 // Bodies are validated by service-catalogue, which owns apartments; zones and

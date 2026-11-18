@@ -27,6 +27,7 @@ const BASES = {
   'service-catalogue': env.SERVICE_CATALOGUE_SERVICE_URL,
   maid: env.MAID_SERVICE_URL,
   'booking-engine': env.BOOKING_ENGINE_SERVICE_URL,
+  'support-trust': env.SUPPORT_TRUST_SERVICE_URL,
 };
 
 // Multipart uploads (service images) are piped through untouched — the owning
@@ -108,5 +109,6 @@ module.exports = {
   catalogue: client('service-catalogue'),
   maid: client('maid'),
   booking: client('booking-engine'),
+  support: client('support-trust'),
   UpstreamError,
 };
