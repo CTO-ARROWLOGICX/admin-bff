@@ -4,12 +4,15 @@ const { createLogger, httpLogger } = require('./logger');
 const { applySecurity } = require('./security');
 const { notFound, makeErrorHandler } = require('./error-handler');
 const { protect } = require('./auth');
+const { sessionsRevokedBefore, revokeSessions } = require('./revocation');
 const { canonicalizePhone } = require('./phone');
 const { validate, z, phone, otpCode, uuid, oneOf, shortText, PHONE_RE } = require('./validate');
 const { loadEnv, port, bool, optionalString } = require('./env');
 const { runPendingMigrations } = require('./db');
 
 module.exports = {
+  sessionsRevokedBefore,
+  revokeSessions,
   // response envelope
   sendResponse,
   sendError,

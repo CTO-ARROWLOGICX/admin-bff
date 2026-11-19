@@ -166,6 +166,22 @@ exports.updateUserStatus = async (req, res, next) => {
     if (activeStatus === 'suspended' || isBlocked === true) blocked = true;
     else if (activeStatus === 'active' || isBlocked === false) blocked = false;
 
+    // A maid on a job can't be suspended until the job is reassigned.
+    if (blocked === true && target.data.role === 'maid' && !target.data.isBlocked) {
+      const jobs = await upstream.booking.get(`/internal/maids/${id}/active-jobs`);
+      if (!jobs.ok) return relay(res, jobs);
+      const active = (jobs.data && jobs.data.bookings) || [];
+      if (active.length) {
+        return sendError(
+          res,
+          409,
+          'This maid is on an active job. Reassign the job before suspending.',
+          'ACTIVE_JOB',
+          active,
+        );
+      }
+    }
+
     let account = target.data;
     if (blocked !== undefined && blocked !== account.isBlocked) {
       const updated = await upstream.auth.patch(`/internal/admin/users/${id}`, { isBlocked: blocked });

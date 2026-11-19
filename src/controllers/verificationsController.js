@@ -27,7 +27,7 @@ const approveVerificationSchema = z.object({
     .default([]),
 });
 
-const displayName = (profile) => {
+const nameOf = (profile) => {
   if (!profile) return null;
   return profile.name || [profile.firstName, profile.lastName].filter(Boolean).join(' ') || null;
 };
@@ -49,7 +49,7 @@ const listPending = async (req, res, next) => {
     return sendResponse(res, 200, 'Pending maid verifications.', {
       maids: maids.map((m) => ({
         ...m,
-        user: { _id: m.userId, name: displayName(profiles[m.userId]) },
+        user: { _id: m.userId, name: nameOf(profiles[m.userId]) },
       })),
       total,
       page,
@@ -60,11 +60,23 @@ const listPending = async (req, res, next) => {
   }
 };
 
+// The approving admin's name, from identity-profiles (kept with the decision).
+const adminName = async (adminId) => {
+  const named = await upstream.identity.post('/internal/admin/profiles/batch', { userIds: [adminId] });
+  const profile = named.ok && named.data ? (named.data.profiles || {})[adminId] : null;
+  return nameOf(profile) || 'Admin';
+};
+
 const approveVerification = async (req, res, next) => {
   try {
+    const reviewedByName = await adminName(req.admin.id);
     return relay(
       res,
-      await upstream.maid.patch(`/internal/verifications/${req.params.id}/approve`, req.validated),
+      await upstream.maid.patch(`/internal/verifications/${req.params.id}/approve`, {
+        ...req.validated,
+        reviewedByUserId: req.admin.id,
+        reviewedByName,
+      }),
     );
   } catch (error) {
     return next(error);
