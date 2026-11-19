@@ -303,6 +303,26 @@ exports.uploadMaidPhoto = async (req, res, next) => {
  * Her last 10 face-liveness-at-login attempts (maid-service), for the Maid
  * Partners detail view's face-verification history.
  */
+/**
+ * @route PATCH /admin/users/:id/daily-approval
+ * Approves a maid for today when her face check did not pass. Maid-only.
+ */
+exports.approveDailyFace = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const target = await fetchAccount(id);
+    if (!target.ok) return relay(res, target);
+    if (target.data.role !== 'maid') {
+      return sendError(res, 400, 'Daily approval applies to maids only.', 'NOT_A_MAID');
+    }
+    const result = await upstream.maid.patch(`/internal/maids/${id}/daily-approval`, {});
+    if (!result.ok) return relay(res, result);
+    return sendResponse(res, 200, 'Maid approved for today.', result.data);
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.getLivenessChecks = async (req, res, next) => {
   try {
     const { id } = req.params;
