@@ -58,6 +58,13 @@ router.get(
   validate(userIdParamSchema, 'params'),
   users.getLivenessChecks,
 );
+// The team lets a maid work today when her face check did not pass.
+router.patch(
+  '/users/:id/daily-approval',
+  allowRoles(SUPER, OPERATIONS),
+  validate(userIdParamSchema, 'params'),
+  users.approveDailyFace,
+);
 router.put(
   '/users/:id/photo',
   allowRoles(SUPER, OPERATIONS),
