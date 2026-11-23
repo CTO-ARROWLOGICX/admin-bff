@@ -131,8 +131,8 @@ router.get('/config/sos', allowRoles(...ALL_ADMINS), sos.getSosConfig);
 router.put('/config/sos', allowRoles(SUPER, SUPPORT), validate(sos.sosConfigSchema), sos.updateSosConfig);
 
 // --- Apartments (Phase 1: apartment-wise service) ----------------------------
-// Bodies are validated by service-catalogue, which owns apartments; zones and
-// clusters are worked out there, never edited here.
+// Bodies are validated by service-catalogue, which owns apartments, zones and
+// micro zones; clusters and hotspots are worked out there, never edited here.
 const apartmentId = validate(apartments.idSchema, 'params');
 const ops = allowRoles(SUPER, OPERATIONS);
 router.get('/apartments', allowRoles(SUPER, OPERATIONS, SUPPORT, MARKETING), apartments.listApartments);
@@ -144,6 +144,14 @@ router.patch('/apartments/:id/status', ops, apartmentId, apartments.setApartment
 router.delete('/apartments/:id', allowRoles(SUPER), apartmentId, apartments.deleteApartment);
 router.get('/apartments/:id/open-bookings', ops, apartmentId, apartments.listOpenBookings);
 router.get('/zones', allowRoles(SUPER, OPERATIONS), apartments.listZones);
+router.post('/zones', ops, apartments.createZone);
+router.put('/zones/:id', ops, apartmentId, apartments.updateZone);
+router.delete('/zones/:id', allowRoles(SUPER), apartmentId, apartments.deleteZone);
+router.post('/zones/:id/micro-zones', ops, apartmentId, apartments.createMicroZone);
+router.put('/micro-zones/:id', ops, apartmentId, apartments.updateMicroZone);
+router.delete('/micro-zones/:id', ops, apartmentId, apartments.deleteMicroZone);
+router.get('/hotspots', allowRoles(SUPER, OPERATIONS, SUPPORT, MARKETING), apartments.listHotspots);
+router.post('/hotspots/refresh', ops, apartments.refreshHotspots);
 router.get('/apartment-requests', allowRoles(SUPER, OPERATIONS, SUPPORT, MARKETING), apartments.listApartmentRequests);
 router.put(
   '/maids/:userId/apartment',

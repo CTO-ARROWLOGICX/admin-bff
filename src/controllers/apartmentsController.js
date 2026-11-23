@@ -19,6 +19,16 @@ const forwardTo = (pathOf) => async (req, res, next) => {
   }
 };
 
+// Zone / micro zone creation records which admin made it.
+const forwardWithCreator = (pathOf) => async (req, res, next) => {
+  try {
+    const body = { ...(req.body || {}), createdBy: req.admin.id };
+    return relay(res, await upstream.catalogue.post(pathOf(req), body));
+  } catch (error) {
+    return next(error);
+  }
+};
+
 /**
  * @route GET /admin/apartments   query: page, limit, search, status, city
  * The Apartments page: each apartment with its towers, status and how many
@@ -86,7 +96,18 @@ module.exports = {
   updateApartment: forwardTo((req) => `/internal/admin/apartments/${req.params.id}`),
   setApartmentStatus: forwardTo((req) => `/internal/admin/apartments/${req.params.id}/status`),
   deleteApartment: forwardTo((req) => `/internal/admin/apartments/${req.params.id}`),
+  // Zones (city scale) and micro zones (localities): admin-made, bodies
+  // validated by service-catalogue. Clusters inside them are system-made.
   listZones: forwardTo(() => '/internal/admin/zones'),
+  createZone: forwardWithCreator(() => '/internal/admin/zones'),
+  updateZone: forwardTo((req) => `/internal/admin/zones/${req.params.id}`),
+  deleteZone: forwardTo((req) => `/internal/admin/zones/${req.params.id}`),
+  createMicroZone: forwardWithCreator((req) => `/internal/admin/zones/${req.params.id}/micro-zones`),
+  updateMicroZone: forwardTo((req) => `/internal/admin/micro-zones/${req.params.id}`),
+  deleteMicroZone: forwardTo((req) => `/internal/admin/micro-zones/${req.params.id}`),
+  // Hotspots: each cluster's busiest apartments, display only.
+  listHotspots: forwardTo(() => '/internal/admin/hotspots'),
+  refreshHotspots: forwardTo(() => '/internal/admin/hotspots/refresh'),
   listApartmentRequests: forwardTo(() => '/internal/admin/apartment-requests'),
   listOpenBookings,
   assignMaidToApartment,
