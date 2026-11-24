@@ -9,6 +9,7 @@ const reviews = require('../controllers/reviewsController');
 const sos = require('../controllers/sosConfigController');
 const verifications = require('../controllers/verificationsController');
 const incidents = require('../controllers/incidentsController');
+const bookings = require('../controllers/bookingsController');
 const {
   listUsersQuerySchema,
   userIdParamSchema,
@@ -164,6 +165,13 @@ router.post(
   validate(operations.assignSchema),
   operations.assignMaid,
 );
+
+// --- Booking Management ------------------------------------------------------
+// The list and details are booking-engine's GET /bookings (admin token).
+const bookingIdParam = validate(bookings.bookingIdSchema, 'params');
+router.get('/reports/bookings', allowRoles(...ALL_ADMINS), bookings.getReport);
+router.patch('/bookings/:id/retry-dispatch', ops, bookingIdParam, bookings.retryDispatch);
+router.delete('/bookings/:id', allowRoles(SUPER), bookingIdParam, bookings.deleteBooking);
 
 // --- Review & Rating ---------------------------------------------------------
 // Any admin, as the monolith's restrictTo('admin') allowed.
