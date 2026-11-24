@@ -1,5 +1,5 @@
 const mockAuth = { get: jest.fn() };
-const mockCatalogue = { forward: jest.fn(), get: jest.fn() };
+const mockCatalogue = { forward: jest.fn(), get: jest.fn(), post: jest.fn() };
 const mockMaid = { get: jest.fn(), put: jest.fn() };
 const mockBooking = { get: jest.fn(), patch: jest.fn() };
 
@@ -150,5 +150,46 @@ describe('/zones and /apartment-requests', () => {
     expect(mockCatalogue.forward.mock.calls[0][0]).toBe('/internal/admin/zones');
     await request(app).get('/apartment-requests').set('authorization', signIn('support_admin'));
     expect(mockCatalogue.forward.mock.calls[1][0]).toBe('/internal/admin/apartment-requests');
+  });
+});
+
+describe('zones, micro zones and hotspots', () => {
+  const ZONE = '66666666-6666-6666-6666-666666666666';
+
+  it('creates zones and micro zones as the signed-in admin', async () => {
+    const token = signIn('operations_admin');
+    mockCatalogue.post.mockResolvedValue({ ok: true, status: 201, message: 'Kochi zone created.', data: { zone: { id: ZONE } } });
+
+    const res = await request(app).post('/zones').set('authorization', token).send({ name: 'Kochi', apartmentIds: [APT] });
+    expect(res.status).toBe(201);
+    const [path, body] = mockCatalogue.post.mock.calls[0];
+    expect(path).toBe('/internal/admin/zones');
+    expect(body).toMatchObject({ name: 'Kochi', apartmentIds: [APT], createdBy: expect.stringMatching(/^cccccccc-/) });
+
+    await request(app).post(`/zones/${ZONE}/micro-zones`).set('authorization', token).send({ name: 'Edachira' });
+    expect(mockCatalogue.post.mock.calls[1][0]).toBe(`/internal/admin/zones/${ZONE}/micro-zones`);
+  });
+
+  it('relays edits, deletes and hotspots to service-catalogue', async () => {
+    const token = signIn('super_admin');
+    mockCatalogue.forward.mockResolvedValue(ok({}));
+    await request(app).put(`/zones/${ZONE}`).set('authorization', token).send({ name: 'Greater Kochi' });
+    await request(app).delete(`/micro-zones/${ZONE}`).set('authorization', token);
+    await request(app).get('/hotspots?zoneId=' + ZONE).set('authorization', token);
+    await request(app).post('/hotspots/refresh').set('authorization', token);
+    expect(mockCatalogue.forward.mock.calls.map((c) => c[0])).toEqual([
+      `/internal/admin/zones/${ZONE}`,
+      `/internal/admin/micro-zones/${ZONE}`,
+      '/internal/admin/hotspots',
+      '/internal/admin/hotspots/refresh',
+    ]);
+  });
+
+  it('role gates: support can view hotspots but not edit zones; only super deletes a zone', async () => {
+    mockCatalogue.forward.mockResolvedValue(ok({ clusters: [] }));
+    expect((await request(app).get('/hotspots').set('authorization', signIn('support_admin'))).status).toBe(200);
+    expect((await request(app).post('/zones').set('authorization', signIn('support_admin')).send({})).status).toBe(403);
+    expect((await request(app).delete(`/zones/${ZONE}`).set('authorization', signIn('operations_admin'))).status).toBe(403);
+    expect((await request(app).put('/zones/nope').set('authorization', signIn('super_admin')).send({})).status).toBe(400);
   });
 });
