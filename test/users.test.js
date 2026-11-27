@@ -42,13 +42,17 @@ const account = (over = {}) => ({
 // Each test signs in as a distinct admin id so the 30s role cache never
 // carries one test's adminRole into the next.
 let adminSeq = 0;
-const signIn = (adminRole = 'super_admin', { blocked = false } = {}) => {
+const signIn = (adminRole = 'super_admin', { blocked = false, status } = {}) => {
   adminSeq += 1;
   const id = `aaaaaaaa-aaaa-aaaa-aaaa-${String(adminSeq).padStart(12, '0')}`;
   const accounts = {
-    [id]: account({ id, role: 'admin', adminRole, isBlocked: blocked, email: 'me@zafabit.com' }),
+    [id]: account({ id, role: 'admin', adminRole, isBlocked: blocked, email: 'me@zafabit.com', ...(status ? { status } : {}) }),
   };
-  mockAuth.get.mockImplementation(async (path) => {
+  mockAuth.get.mockImplementation(async (path, query) => {
+    if (extraAuthGet) {
+      const answer = await extraAuthGet(path, query);
+      if (answer) return answer;
+    }
     const m = path.match(/^\/internal\/users\/(.+)$/);
     if (m && accounts[m[1]]) return ok(accounts[m[1]]);
     if (m && extraAccounts[m[1]]) return ok(extraAccounts[m[1]]);
@@ -61,10 +65,12 @@ const signIn = (adminRole = 'super_admin', { blocked = false } = {}) => {
   return { id, token: `Bearer ${generateToken(id, 'admin')}` };
 };
 let extraAccounts = {};
+let extraAuthGet = null; // (path, query) => result | undefined
 
 beforeEach(() => {
   jest.resetAllMocks();
   extraAccounts = {};
+  extraAuthGet = null;
 });
 
 describe('admin guard', () => {
@@ -81,6 +87,13 @@ describe('admin guard', () => {
 
   it('403s a blocked admin', async () => {
     const { token } = signIn('super_admin', { blocked: true });
+    const res = await request(app).get('/users').set('authorization', token);
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('ACCOUNT_BLOCKED');
+  });
+
+  it.each(['pending_deletion', 'deleting', 'deleted'])('403s an admin whose account is %s', async (status) => {
+    const { token } = signIn('super_admin', { status });
     const res = await request(app).get('/users').set('authorization', token);
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('ACCOUNT_BLOCKED');
@@ -147,6 +160,57 @@ describe('GET /users', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.users).toEqual([]);
     expect(mockAuth.post).not.toHaveBeenCalled();
+  });
+
+  it('accepts the pending_deletion and deleted status filters', async () => {
+    const { token } = signIn();
+    mockAuth.post.mockResolvedValue(ok({ users: [], total: 0 }));
+    for (const status of ['pending_deletion', 'deleted']) {
+      const res = await request(app).get(`/users?status=${status}`).set('authorization', token);
+      expect(res.status).toBe(200);
+    }
+    expect(mockAuth.post.mock.calls.map((c) => c[1].status)).toEqual(['pending_deletion', 'deleted']);
+    expect((await request(app).get('/users?status=bogus').set('authorization', token)).status).toBe(400);
+  });
+
+  it('passes the lifecycle fields and deleted profiles through', async () => {
+    const { token } = signIn();
+    mockAuth.post.mockResolvedValue(
+      ok({
+        users: [
+          account({
+            status: 'pending_deletion',
+            deletionRequestedAt: '2026-11-01T00:00:00.000Z',
+            deletionScheduledFor: '2026-12-01T00:00:00.000Z',
+            isReturningUser: true,
+          }),
+        ],
+        total: 1,
+      }),
+    );
+    mockIdentity.post.mockResolvedValue(
+      ok({ profiles: { [USER_ID]: { deleted: true, name: 'Deleted user', firstName: null, lastName: null } } }),
+    );
+    const res = await request(app).get('/users').set('authorization', token);
+    expect(res.status).toBe(200);
+    expect(res.body.data.users[0]).toMatchObject({
+      status: 'pending_deletion',
+      deletionRequestedAt: '2026-11-01T00:00:00.000Z',
+      deletionScheduledFor: '2026-12-01T00:00:00.000Z',
+      deletedAt: null,
+      isReturningUser: true,
+      deleted: true,
+      name: 'Deleted user',
+      firstName: null,
+    });
+  });
+
+  it('defaults status to active for accounts without one', async () => {
+    const { token } = signIn();
+    mockAuth.post.mockResolvedValue(ok({ users: [account()], total: 1 }));
+    mockIdentity.post.mockResolvedValue(ok({ profiles: {} }));
+    const res = await request(app).get('/users').set('authorization', token);
+    expect(res.body.data.users[0]).toMatchObject({ status: 'active', deleted: false, isReturningUser: false });
   });
 
   it('only super admins may list admins', async () => {
@@ -384,22 +448,237 @@ describe('PUT /users/:id/photo', () => {
 });
 
 describe('DELETE /users/:id', () => {
-  it('deletes in auth then identity', async () => {
+  const del = (token, path = `/users/${USER_ID}`) => request(app).delete(path).set('authorization', token);
+
+  it('asks auth to delete with the reason and requester; no identity call (auth fans out)', async () => {
+    const { id, token } = signIn('operations_admin');
+    extraAccounts[USER_ID] = account();
+    mockAuth.del.mockResolvedValue(
+      ok(account({ status: 'pending_deletion', deletionScheduledFor: '2026-12-27T00:00:00.000Z' })),
+    );
+    const res = await del(token).send({ reason: 'Asked by email' });
+    expect(res.status).toBe(200);
+    expect(mockAuth.del).toHaveBeenCalledWith(`/internal/admin/users/${USER_ID}`, {
+      immediate: false,
+      reason: 'Asked by email',
+      requestedBy: id,
+    });
+    expect(mockIdentity.del).not.toHaveBeenCalled();
+    expect(res.body.message).toBe('Account scheduled for deletion in 30 days.');
+    expect(res.body.data).toMatchObject({
+      id: USER_ID,
+      status: 'pending_deletion',
+      deletionScheduledFor: '2026-12-27T00:00:00.000Z',
+    });
+  });
+
+  it('accepts reason and immediate in the query string; super admins get immediate', async () => {
+    const { id, token } = signIn();
+    extraAccounts[USER_ID] = account();
+    mockAuth.del.mockResolvedValue(ok(account({ status: 'deleted', deletedAt: '2026-11-27T00:00:00.000Z' })));
+    const res = await del(token, `/users/${USER_ID}?immediate=true&reason=Court%20order`);
+    expect(res.status).toBe(200);
+    expect(mockAuth.del).toHaveBeenCalledWith(`/internal/admin/users/${USER_ID}`, {
+      immediate: true,
+      reason: 'Court order',
+      requestedBy: id,
+    });
+    expect(res.body.message).toBe('User deleted successfully');
+  });
+
+  it('ignores immediate from a non-super admin (30-day grace instead)', async () => {
+    const { token } = signIn('operations_admin');
+    extraAccounts[USER_ID] = account();
+    mockAuth.del.mockResolvedValue(ok(account({ status: 'pending_deletion' })));
+    const res = await del(token).send({ reason: 'Asked by phone', immediate: true });
+    expect(res.status).toBe(200);
+    expect(mockAuth.del.mock.calls[0][1].immediate).toBe(false);
+  });
+
+  it('requires a reason', async () => {
     const { token } = signIn();
     extraAccounts[USER_ID] = account();
-    mockAuth.del.mockResolvedValue(ok({}));
-    mockIdentity.del.mockResolvedValue(ok({}));
-    const res = await request(app).delete(`/users/${USER_ID}`).set('authorization', token);
-    expect(res.status).toBe(200);
-    expect(mockAuth.del).toHaveBeenCalledWith(`/internal/admin/users/${USER_ID}`);
-    expect(mockIdentity.del).toHaveBeenCalledWith(`/internal/profiles/${USER_ID}`);
+    const res = await del(token);
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(mockAuth.del).not.toHaveBeenCalled();
+  });
+
+  it("relays auth's blockers unchanged", async () => {
+    const { token } = signIn();
+    extraAccounts[USER_ID] = account();
+    const blockers = [
+      { service: 'booking-engine', code: 'OPEN_BOOKINGS', message: 'This person has 2 upcoming bookings.', count: 2 },
+    ];
+    mockAuth.del.mockResolvedValue({
+      ok: false,
+      status: 409,
+      data: null,
+      message: "We couldn't delete this account yet.",
+      error: { code: 'DELETION_BLOCKED', message: "We couldn't delete this account yet.", details: blockers },
+    });
+    const res = await del(token).send({ reason: 'Asked by email' });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('DELETION_BLOCKED');
+    expect(res.body.error.details).toEqual(blockers);
+  });
+
+  it('relays 503 DELETION_CHECK_UNAVAILABLE with the unreachable services', async () => {
+    const { token } = signIn();
+    extraAccounts[USER_ID] = account();
+    mockAuth.del.mockResolvedValue({
+      ok: false,
+      status: 503,
+      data: null,
+      message: 'down',
+      error: { code: 'DELETION_CHECK_UNAVAILABLE', message: 'down', details: [{ service: 'payments' }] },
+    });
+    const res = await del(token).send({ reason: 'Asked by email' });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatchObject({ code: 'DELETION_CHECK_UNAVAILABLE', details: [{ service: 'payments' }] });
+  });
+
+  it('only super admins may delete an admin', async () => {
+    const { token } = signIn('operations_admin');
+    extraAccounts[OTHER_ADMIN_ID] = account({ id: OTHER_ADMIN_ID, role: 'admin', adminRole: 'support_admin' });
+    const res = await del(token, `/users/${OTHER_ADMIN_ID}`).send({ reason: 'Left the company' });
+    expect(res.status).toBe(403);
+    expect(mockAuth.del).not.toHaveBeenCalled();
   });
 
   it("won't delete the caller's own account", async () => {
     const { id, token } = signIn();
-    const res = await request(app).delete(`/users/${id}`).set('authorization', token);
+    const res = await del(token, `/users/${id}`).send({ reason: 'Leaving' });
     expect(res.status).toBe(400);
     expect(mockAuth.del).not.toHaveBeenCalled();
+  });
+
+  it('DELETE /maids/:id runs the same deletion for a maid', async () => {
+    const MAID_ID = '44444444-4444-4444-4444-444444444444';
+    const { id, token } = signIn('operations_admin');
+    extraAccounts[MAID_ID] = account({ id: MAID_ID, role: 'maid' });
+    mockAuth.del.mockResolvedValue(ok(account({ id: MAID_ID, role: 'maid', status: 'pending_deletion' })));
+    const res = await del(token, `/maids/${MAID_ID}`).send({ reason: 'Left the platform' });
+    expect(res.status).toBe(200);
+    expect(mockAuth.del).toHaveBeenCalledWith(`/internal/admin/users/${MAID_ID}`, {
+      immediate: false,
+      reason: 'Left the platform',
+      requestedBy: id,
+    });
+  });
+});
+
+describe('GET /users/:id/deletion-blockers', () => {
+  it('relays the blockers and unavailable services', async () => {
+    const { token } = signIn('operations_admin');
+    extraAccounts[USER_ID] = account();
+    const blockers = [{ service: 'payments', code: 'WALLET_BALANCE', message: 'Wallet has a balance.', count: 1 }];
+    extraAuthGet = (path) =>
+      path === `/internal/admin/users/${USER_ID}/deletion-blockers` ? ok({ blockers, unavailable: ['maid'] }) : undefined;
+    const res = await request(app).get(`/users/${USER_ID}/deletion-blockers`).set('authorization', token);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ blockers, unavailable: ['maid'] });
+  });
+
+  it('is closed to support admins', async () => {
+    const { token } = signIn('support_admin');
+    const res = await request(app).get(`/users/${USER_ID}/deletion-blockers`).set('authorization', token);
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('POST /users/:id/restore', () => {
+  it('restores via auth and returns the composed user', async () => {
+    const { token } = signIn('operations_admin');
+    extraAccounts[USER_ID] = account({ status: 'pending_deletion' });
+    mockAuth.post.mockResolvedValue(ok(account({ status: 'active' })));
+    mockIdentity.post.mockResolvedValue(ok({ profiles: { [USER_ID]: { name: 'Asha K' } } }));
+    const res = await request(app).post(`/users/${USER_ID}/restore`).set('authorization', token);
+    expect(res.status).toBe(200);
+    expect(mockAuth.post).toHaveBeenCalledWith(`/internal/admin/users/${USER_ID}/restore`, {});
+    expect(res.body.data.user).toMatchObject({ id: USER_ID, status: 'active', name: 'Asha K' });
+  });
+
+  it('relays 409 NOT_PENDING_DELETION', async () => {
+    const { token } = signIn();
+    extraAccounts[USER_ID] = account();
+    mockAuth.post.mockResolvedValue(fail(409, 'NOT_PENDING_DELETION'));
+    const res = await request(app).post(`/users/${USER_ID}/restore`).set('authorization', token);
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('NOT_PENDING_DELETION');
+  });
+
+  it('only super admins may restore an admin', async () => {
+    const { token } = signIn('operations_admin');
+    extraAccounts[OTHER_ADMIN_ID] = account({ id: OTHER_ADMIN_ID, role: 'admin', status: 'pending_deletion' });
+    const res = await request(app).post(`/users/${OTHER_ADMIN_ID}/restore`).set('authorization', token);
+    expect(res.status).toBe(403);
+    expect(mockAuth.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /users/:id/legal-hold', () => {
+  const record = {
+    userId: USER_ID,
+    role: 'customer',
+    name: 'Asha K',
+    phone: '+919990000001',
+    email: null,
+    employeeId: null,
+    reasons: [{ code: 'SOS', message: 'Raised an SOS.', count: 1 }],
+    createdAt: '2026-11-01T00:00:00.000Z',
+    purgeAfter: '2033-11-01T00:00:00.000Z',
+  };
+
+  it('relays the locked record with the admin id and reason', async () => {
+    const { id, token } = signIn();
+    extraAuthGet = (path) => (path === `/internal/admin/legal-holds/${USER_ID}` ? ok(record) : undefined);
+    const res = await request(app)
+      .get(`/users/${USER_ID}/legal-hold`)
+      .query({ reason: 'Police request ref 42/2026' })
+      .set('authorization', token);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual(record);
+    expect(mockAuth.get).toHaveBeenCalledWith(`/internal/admin/legal-holds/${USER_ID}`, {
+      adminId: id,
+      reason: 'Police request ref 42/2026',
+    });
+  });
+
+  it('requires a reason of at least 10 characters', async () => {
+    const { token } = signIn();
+    const res = await request(app).get(`/users/${USER_ID}/legal-hold?reason=short`).set('authorization', token);
+    expect(res.status).toBe(400);
+    expect(mockAuth.get).not.toHaveBeenCalledWith(expect.stringContaining('legal-holds'), expect.anything());
+  });
+
+  it('is super admin only', async () => {
+    const { token } = signIn('operations_admin');
+    const res = await request(app)
+      .get(`/users/${USER_ID}/legal-hold?reason=Police%20request%20ref%2042`)
+      .set('authorization', token);
+    expect(res.status).toBe(403);
+  });
+
+  it('relays 404 when there is no hold', async () => {
+    const { token } = signIn();
+    extraAuthGet = (path) => (path.startsWith('/internal/admin/legal-holds/') ? fail(404, 'NOT_FOUND') : undefined);
+    const res = await request(app)
+      .get(`/users/${USER_ID}/legal-hold?reason=Police%20request%20ref%2042`)
+      .set('authorization', token);
+    expect(res.status).toBe(404);
+  });
+
+  it('access log is super admin only and relays the entries', async () => {
+    const entries = [{ adminId: ADMIN_ID, reason: 'Police request ref 42', accessedAt: '2026-11-20T00:00:00.000Z' }];
+    extraAuthGet = (path) =>
+      path === `/internal/admin/legal-holds/${USER_ID}/access-log` ? ok({ entries }) : undefined;
+    const ops = signIn('operations_admin');
+    expect((await request(app).get(`/users/${USER_ID}/legal-hold/access-log`).set('authorization', ops.token)).status).toBe(403);
+    const sup = signIn();
+    const res = await request(app).get(`/users/${USER_ID}/legal-hold/access-log`).set('authorization', sup.token);
+    expect(res.status).toBe(200);
+    expect(res.body.data.entries).toEqual(entries);
   });
 });
 
@@ -524,7 +803,8 @@ describe('POST /maids', () => {
     const res = await create(token, { ...form, jobType: 'night_shift' });
 
     expect(res.status).toBe(400);
-    expect(mockAuth.del).toHaveBeenCalledWith(`/internal/admin/users/${MAID_ID}`);
+    // A hard rollback, not the 30-day deletion.
+    expect(mockAuth.del).toHaveBeenCalledWith(`/internal/admin/users/${MAID_ID}`, { rollback: true });
     expect(mockIdentity.put).not.toHaveBeenCalled();
   });
 
@@ -537,7 +817,7 @@ describe('POST /maids', () => {
     const res = await create(token);
 
     expect(res.status).toBe(502);
-    expect(mockAuth.del).toHaveBeenCalledWith(`/internal/admin/users/${MAID_ID}`);
+    expect(mockAuth.del).toHaveBeenCalledWith(`/internal/admin/users/${MAID_ID}`, { rollback: true });
   });
 
   it('still 201s if naming the profile fails', async () => {

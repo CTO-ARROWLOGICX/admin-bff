@@ -8,7 +8,7 @@ const filter = (inner) =>
 
 const listUsersQuerySchema = z.object({
   role: filter(schemas.oneOf(['customer', 'maid', 'admin', 'agent'], 'Role')),
-  status: filter(schemas.oneOf(['active', 'inactive', 'blocked'], 'Status')),
+  status: filter(schemas.oneOf(['active', 'inactive', 'blocked', 'pending_deletion', 'deleted'], 'Status')),
   filterType: filter(schemas.oneOf(['new', 'active', 'inactive', 'blocked'], 'Filter')),
   search: filter(z.string().trim().max(100)),
   location: filter(z.string().trim().max(100)),
@@ -77,7 +77,32 @@ const createMaidSchema = z.object({
   isIdentityVerified: z.boolean().default(true),
 });
 
+// DELETE /admin/users/:id — the panel may send these in the query string or
+// the JSON body. `immediate` is honoured for super admins only (controller).
+const deleteUserSchema = z.object({
+  reason: z
+    .string({ required_error: 'Tell us why this account is being deleted.' })
+    .trim()
+    .min(3, 'Tell us why this account is being deleted.')
+    .max(500, 'Reason must be 500 characters or fewer.'),
+  immediate: z.preprocess(
+    (v) => (v === 'true' || v === '1' ? true : v === 'false' || v === '0' || v === '' ? false : v),
+    z.boolean().default(false),
+  ),
+});
+
+// GET /admin/users/:id/legal-hold — every look is logged by auth with this reason.
+const legalHoldQuerySchema = z.object({
+  reason: z
+    .string({ required_error: 'Tell us why you need to see this record.' })
+    .trim()
+    .min(10, 'Tell us why you need to see this record (at least 10 characters).')
+    .max(500, 'Reason must be 500 characters or fewer.'),
+});
+
 module.exports = {
+  deleteUserSchema,
+  legalHoldQuerySchema,
   listUsersQuerySchema,
   userIdParamSchema,
   updateUserSchema,

@@ -17,10 +17,19 @@ const {
   updateStatusSchema,
   createAdminSchema,
   createMaidSchema,
+  deleteUserSchema,
+  legalHoldQuerySchema,
 } = require('../schemas/users');
 
 const { SUPER, OPERATIONS, SUPPORT, MARKETING } = ADMIN_ROLES;
 const router = express.Router();
+
+// DELETE carries { reason, immediate } in the query string or the JSON body;
+// gather both (body wins) so one schema validates either.
+const deletionInput = (req, res, next) => {
+  req.deletion = { ...req.query, ...(req.body && typeof req.body === 'object' ? req.body : {}) };
+  next();
+};
 
 router.use(requireAdmin);
 
@@ -44,7 +53,36 @@ router.delete(
   '/users/:id',
   allowRoles(SUPER, OPERATIONS),
   validate(userIdParamSchema, 'params'),
+  deletionInput,
+  validate(deleteUserSchema, 'deletion'),
   users.deleteUser,
+);
+// Account deletion lifecycle: what blocks it, undo during the 30-day grace,
+// and the super-admin-only legal hold record (every look is logged by auth).
+router.get(
+  '/users/:id/deletion-blockers',
+  allowRoles(SUPER, OPERATIONS),
+  validate(userIdParamSchema, 'params'),
+  users.getDeletionBlockers,
+);
+router.post(
+  '/users/:id/restore',
+  allowRoles(SUPER, OPERATIONS),
+  validate(userIdParamSchema, 'params'),
+  users.restoreUser,
+);
+router.get(
+  '/users/:id/legal-hold',
+  allowRoles(SUPER),
+  validate(userIdParamSchema, 'params'),
+  validate(legalHoldQuerySchema, 'query'),
+  users.getLegalHold,
+);
+router.get(
+  '/users/:id/legal-hold/access-log',
+  allowRoles(SUPER),
+  validate(userIdParamSchema, 'params'),
+  users.getLegalHoldAccessLog,
 );
 router.patch(
   '/users/:id/status',
@@ -108,6 +146,8 @@ router.delete(
   '/maids/:id',
   allowRoles(SUPER, OPERATIONS),
   validate(userIdParamSchema, 'params'),
+  deletionInput,
+  validate(deleteUserSchema, 'deletion'),
   users.deleteMaid,
 );
 
