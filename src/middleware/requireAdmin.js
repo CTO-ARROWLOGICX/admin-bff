@@ -37,6 +37,16 @@ const loadAdmin = async (req, res, next) => {
     if (!account || account.role !== 'admin') {
       return sendError(res, 401, 'Your session is no longer valid. Please sign in again.', 'INVALID_SESSION');
     }
+    // An admin whose account is being (or has been) deleted is refused like a
+    // blocked one. Accounts from before the lifecycle carry no status.
+    if (account.status && account.status !== 'active') {
+      return sendError(
+        res,
+        403,
+        'This account has been closed. Please contact your administrator.',
+        'ACCOUNT_BLOCKED',
+      );
+    }
     if (account.isBlocked) {
       return sendError(
         res,

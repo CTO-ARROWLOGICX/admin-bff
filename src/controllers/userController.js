@@ -46,6 +46,15 @@ const composeUser = (account, profile, maidProfile = null) => ({
   adminRole: account.adminRole || undefined,
   isVerified: account.isVerified,
   isBlocked: account.isBlocked,
+  // Account lifecycle (auth): active | pending_deletion | deleting | deleted.
+  status: account.status || 'active',
+  deletionRequestedAt: account.deletionRequestedAt || null,
+  deletionScheduledFor: account.deletionScheduledFor || null,
+  deletedAt: account.deletedAt || null,
+  isReturningUser: Boolean(account.isReturningUser),
+  // identity-profiles answers a deleted person's lookup with deleted: true and
+  // a stand-in name ('Deleted user' / 'Former partner'); pass both through.
+  deleted: Boolean(profile && profile.deleted),
   createdAt: account.createdAt,
   updatedAt: account.updatedAt,
   addresses: (profile && profile.addresses) || [],
@@ -339,34 +348,136 @@ exports.getLivenessChecks = async (req, res, next) => {
   }
 };
 
+// Looks up the target account and applies the admin-on-admin gate shared by
+// delete / restore / deletion-blockers. Returns the account, or null once it
+// has answered the request.
+const loadManagedTarget = async (req, res, action) => {
+  const target = await fetchAccount(req.params.id);
+  if (!target.ok) {
+    relay(res, target);
+    return null;
+  }
+  if (target.data.role === 'admin' && !isSuperAdmin(req)) {
+    sendError(res, 403, `Only super admins can ${action} administrator accounts.`, 'FORBIDDEN');
+    return null;
+  }
+  return target.data;
+};
+
 /**
- * @route DELETE /admin/users/:id
- * Removes the credentials (auth) then the profile rows (identity-profiles).
- * Maid profile rows: pending maid-service internal API.
+ * @route DELETE /admin/users/:id   query or body: { reason, immediate? }
+ * Auth owns the deletion: it checks every service's blockers, then either
+ * starts the 30-day grace (status 'pending_deletion') or, with immediate=true
+ * (super admins only), anonymises the account across services right away.
+ * Auth's refusals (409 DELETION_BLOCKED with the blockers in error.details,
+ * 503 DELETION_CHECK_UNAVAILABLE, 409 ALREADY_DELETED …) reach the panel as-is.
  */
 exports.deleteUser = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const target = await fetchAccount(id);
-    if (!target.ok) return relay(res, target);
-    if (target.data.role === 'admin' && !isSuperAdmin(req)) {
-      return sendError(res, 403, 'Only super admins can delete administrator accounts.', 'FORBIDDEN');
-    }
+    const target = await loadManagedTarget(req, res, 'delete');
+    if (!target) return undefined;
     if (id === req.admin.id) {
       return sendError(res, 400, "You can't delete your own account here.", 'CANNOT_DELETE_SELF');
     }
 
-    const removed = await upstream.auth.del(`/internal/admin/users/${id}`);
+    const { reason, immediate } = req.validated;
+    const removed = await upstream.auth.del(`/internal/admin/users/${id}`, {
+      immediate: Boolean(immediate) && isSuperAdmin(req),
+      reason,
+      requestedBy: req.admin.id,
+    });
     if (!removed.ok) return relay(res, removed);
     forgetAccount(id);
 
-    // Best-effort — the account is already gone, so an orphaned profile row
-    // is harmless (and identity-profiles' delete is idempotent to retry).
-    await upstream.identity.del(`/internal/profiles/${id}`).catch(() => null);
-
-    return sendResponse(res, 200, 'User deleted successfully', { id });
+    const account = removed.data || { ...target, id };
+    const pending = account.status === 'pending_deletion';
+    return sendResponse(
+      res,
+      200,
+      pending ? 'Account scheduled for deletion in 30 days.' : 'User deleted successfully',
+      {
+        id,
+        status: account.status || null,
+        deletionScheduledFor: account.deletionScheduledFor || null,
+        user: composeUser(account, null),
+      },
+    );
   } catch (error) {
-    next(error);
+    return next(error);
+  }
+};
+
+/**
+ * @route GET /admin/users/:id/deletion-blockers
+ * What would stop this account being deleted right now (open bookings, wallet
+ * balance …), and which services could not be asked.
+ */
+exports.getDeletionBlockers = async (req, res, next) => {
+  try {
+    const target = await loadManagedTarget(req, res, 'delete');
+    if (!target) return undefined;
+    const result = await upstream.auth.get(`/internal/admin/users/${req.params.id}/deletion-blockers`);
+    if (!result.ok) return relay(res, result);
+    return sendResponse(res, 200, 'Deletion checks.', {
+      blockers: (result.data && result.data.blockers) || [],
+      unavailable: (result.data && result.data.unavailable) || [],
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+/**
+ * @route POST /admin/users/:id/restore
+ * Cancels a pending deletion during the 30-day grace (409 NOT_PENDING_DELETION otherwise).
+ */
+exports.restoreUser = async (req, res, next) => {
+  try {
+    const target = await loadManagedTarget(req, res, 'restore');
+    if (!target) return undefined;
+    const restored = await upstream.auth.post(`/internal/admin/users/${req.params.id}/restore`, {});
+    if (!restored.ok) return relay(res, restored);
+    forgetAccount(req.params.id);
+    const profiles = await fetchProfiles([req.params.id]).catch(() => ({}));
+    return sendResponse(res, 200, 'Account restored.', {
+      user: composeUser(restored.data, profiles[req.params.id]),
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+/**
+ * @route GET /admin/users/:id/legal-hold?reason=   (super_admin only)
+ * The locked contact record auth keeps for a deleted person under legal hold.
+ * Auth logs every look against the admin and reason.
+ */
+exports.getLegalHold = async (req, res, next) => {
+  try {
+    const result = await upstream.auth.get(`/internal/admin/legal-holds/${req.params.id}`, {
+      adminId: req.admin.id,
+      reason: req.validated.reason,
+    });
+    if (!result.ok) return relay(res, result);
+    return sendResponse(res, 200, 'Legal hold record.', result.data);
+  } catch (error) {
+    return next(error);
+  }
+};
+
+/**
+ * @route GET /admin/users/:id/legal-hold/access-log   (super_admin only)
+ */
+exports.getLegalHoldAccessLog = async (req, res, next) => {
+  try {
+    const result = await upstream.auth.get(`/internal/admin/legal-holds/${req.params.id}/access-log`);
+    if (!result.ok) return relay(res, result);
+    return sendResponse(res, 200, 'Legal hold access log.', {
+      entries: (result.data && result.data.entries) || [],
+    });
+  } catch (error) {
+    return next(error);
   }
 };
 
@@ -425,7 +536,10 @@ exports.createMaid = async (req, res, next) => {
 
     // A maid without a profile can't be dispatched, so a refused or failed
     // profile undoes the account — the admin can then simply resubmit.
-    const undo = () => upstream.auth.del(`/internal/admin/users/${account.id}`).catch(() => null);
+    // rollback=true makes auth hard-remove the just-created account instead of
+    // starting the 30-day deletion grace.
+    const undo = () =>
+      upstream.auth.del(`/internal/admin/users/${account.id}`, { rollback: true }).catch(() => null);
     let profiled;
     try {
       profiled = await upstream.maid.patch(`/internal/maids/${account.id}/profile`, {

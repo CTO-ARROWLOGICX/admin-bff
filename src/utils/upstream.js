@@ -88,7 +88,7 @@ const client = (service) => ({
   post: (pathname, body) => call(service, 'POST', pathname, { body }),
   put: (pathname, body) => call(service, 'PUT', pathname, { body }),
   patch: (pathname, body) => call(service, 'PATCH', pathname, { body }),
-  del: (pathname) => call(service, 'DELETE', pathname),
+  del: (pathname, query) => call(service, 'DELETE', pathname, { query }),
   // Relay the inbound admin request (method, query, JSON or multipart body,
   // locale) to `pathname` on this service.
   forward: (pathname, req) => {
